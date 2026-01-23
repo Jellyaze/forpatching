@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, ScrollView, Image, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TextInput, ScrollView, Image, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import DropDownPicker from 'react-native-dropdown-picker';
@@ -10,13 +10,14 @@ import PrimaryButton from '../../components/ui/PrimaryButton';
 export default function ProfileDetailsScreen({ navigation }: any) {
   const auth = useAuth() as any;
   const { user, profile, updateProfile } = auth;
+
   const [loading, setLoading] = useState(false);
-  
-  const [profileImage, setProfileImage] = useState<string | null>(profile?.profile_image_url || null);
-  const [fullName, setFullName] = useState(profile?.full_name || '');
+
+  const [profileImage, setProfileImage] = useState<string | null>(profile?.photo_url || null);
+  const [fullName, setFullName] = useState(profile?.name || '');
   const [age, setAge] = useState(profile?.age?.toString() || '');
   const [contactNumber, setContactNumber] = useState(profile?.contact_number || '');
-  
+
   const [labelOpen, setLabelOpen] = useState(false);
   const [label, setLabel] = useState<string | null>(profile?.label || null);
   const [labelItems] = useState([
@@ -81,10 +82,15 @@ export default function ProfileDetailsScreen({ navigation }: any) {
       return;
     }
 
+    if (!user?.id) {
+      Alert.alert('Error', 'Not logged in');
+      return;
+    }
+
     setLoading(true);
 
     const { error } = await updateProfile({
-      full_name: fullName.trim(),
+      name: fullName.trim(),
       label,
       age: parseInt(age),
       gender,
@@ -97,7 +103,7 @@ export default function ProfileDetailsScreen({ navigation }: any) {
       Alert.alert('Error', 'Failed to update profile');
     } else {
       Alert.alert('Success', 'Profile updated successfully!', [
-        { text: 'OK', onPress: () => navigation.goBack() }
+        { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     }
   };
@@ -184,18 +190,9 @@ export default function ProfileDetailsScreen({ navigation }: any) {
           />
 
           <Text style={styles.label}>Identification</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="ID Number (Optional)"
-            editable={false}
-          />
+          <TextInput style={styles.input} placeholder="ID Number (Optional)" editable={false} />
 
-          <PrimaryButton
-            title="Save"
-            onPress={handleSave}
-            loading={loading}
-            style={styles.saveButton}
-          />
+          <PrimaryButton title="Save" onPress={handleSave} loading={loading} style={styles.saveButton} />
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -203,10 +200,7 @@ export default function ProfileDetailsScreen({ navigation }: any) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
+  container: { flex: 1, backgroundColor: Colors.background },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -216,18 +210,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.lightGray,
   },
-  backButton: {
-    fontSize: 16,
-    color: Colors.primary,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: Colors.text.primary,
-  },
-  scrollContent: {
-    padding: 20,
-  },
+  backButton: { fontSize: 16, color: Colors.primary },
+  headerTitle: { fontSize: 18, fontWeight: 'bold', color: Colors.text.primary },
+  scrollContent: { padding: 20 },
   profileImageContainer: {
     width: 120,
     height: 120,
@@ -237,11 +222,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     marginBottom: 15,
   },
-  profileImage: {
-    width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
-  },
+  profileImage: { width: '100%', height: '100%', resizeMode: 'cover' },
   replacePhotoButton: {
     alignSelf: 'center',
     paddingVertical: 10,
@@ -251,40 +232,12 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginBottom: 30,
   },
-  replacePhotoText: {
-    color: Colors.primary,
-    fontWeight: 'bold',
-  },
-  formContainer: {
-    backgroundColor: Colors.white,
-    borderRadius: 10,
-    padding: 20,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.text.primary,
-    marginBottom: 8,
-    marginTop: 15,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 10,
-    padding: 12,
-    backgroundColor: Colors.white,
-  },
-  dropdownWrapper: {
-    zIndex: 1000,
-    marginBottom: 10,
-  },
-  dropdown: {
-    borderColor: Colors.border,
-  },
-  dropdownContainer: {
-    borderColor: Colors.border,
-  },
-  saveButton: {
-    marginTop: 30,
-  },
+  replacePhotoText: { color: Colors.primary, fontWeight: 'bold' },
+  formContainer: { backgroundColor: Colors.white, borderRadius: 10, padding: 20 },
+  label: { fontSize: 14, fontWeight: '600', color: Colors.text.primary, marginBottom: 8, marginTop: 15 },
+  input: { borderWidth: 1, borderColor: Colors.border, borderRadius: 10, padding: 12, backgroundColor: Colors.white },
+  dropdownWrapper: { zIndex: 1000, marginBottom: 10 },
+  dropdown: { borderColor: Colors.border },
+  dropdownContainer: { borderColor: Colors.border },
+  saveButton: { marginTop: 30 },
 });

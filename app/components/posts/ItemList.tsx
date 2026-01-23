@@ -34,6 +34,7 @@ export default function ItemList({ data, navigation, refreshControl }: ItemListP
 
   return (
     <FlatList
+      nestedScrollEnabled
       data={data}
       keyExtractor={(item) => item.id}
       renderItem={({ item }) => (

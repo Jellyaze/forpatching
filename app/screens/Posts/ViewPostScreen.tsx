@@ -1,5 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Alert, ActivityIndicator, Dimensions } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  Image,
+  TouchableOpacity,
+  Alert,
+  ActivityIndicator,
+  Dimensions,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { useAuth } from '../../context/AuthContext';
@@ -9,13 +19,20 @@ import { createConversation } from '../../services/messageService';
 import { Colors } from '../../constants/Colors';
 import { formatDate, formatTime } from '../../utils/formatDate';
 import PrimaryButton from '../../components/ui/PrimaryButton';
+import { supabase } from '../../config/supabase';
 
 const { width } = Dimensions.get('window');
 
 export default function ViewPostScreen({ route, navigation }: any) {
   const { postId } = route.params;
-  const { user, profile } = useAuth() as any;
+  const { user } = useAuth() as any;
+
   const [post, setPost] = useState<Post | null>(null);
+
+  const [posterProfile, setPosterProfile] = useState<any>(null);
+  const [claimerProfile, setClaimerProfile] = useState<any>(null);
+  const [claimRow, setClaimRow] = useState<any>(null);
+
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -24,37 +41,75 @@ export default function ViewPostScreen({ route, navigation }: any) {
   }, [postId]);
 
   const loadPost = async () => {
+    setLoading(true);
+
     const { data, error } = await getPostById(postId);
+
     if (!error && data) {
       setPost(data);
+
+      // 1) Poster Profile
+      const { data: poster, error: posterErr } = await supabase
+        .from('app_d56ee_profiles')
+        .select('*')
+        .eq('user_id', data.user_id)
+        .maybeSingle();
+
+      if (!posterErr) setPosterProfile(poster);
+
+      // 2) Claim + Claimer (only load if user is owner)
+      if (user?.id && user.id === data.user_id) {
+        const { data: claim, error: claimErr } = await supabase
+          .from('app_d56ee_claims')
+          .select('*')
+          .eq('post_id', data.id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (!claimErr && claim) {
+          setClaimRow(claim);
+
+          const { data: claimer, error: claimerErr } = await supabase
+            .from('app_d56ee_profiles')
+            .select('*')
+            .eq('user_id', claim.claimer_id)
+            .maybeSingle();
+
+          if (!claimerErr) setClaimerProfile(claimer);
+        } else {
+          setClaimRow(null);
+          setClaimerProfile(null);
+        }
+      } else {
+        setClaimRow(null);
+        setClaimerProfile(null);
+      }
     }
+
     setLoading(false);
   };
 
   const handleClaim = async () => {
     if (!user || !post) return;
 
-    Alert.alert(
-      'Confirm claim',
-      'Are you sure you want to claim this item?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Confirm',
-          onPress: async () => {
-            setActionLoading(true);
-            const { error } = await createClaim(post.id, user.id, post.user_id);
-            setActionLoading(false);
+    Alert.alert('Confirm claim', 'Are you sure you want to claim this item?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Confirm',
+        onPress: async () => {
+          setActionLoading(true);
+          const { error } = await createClaim(post.id, user.id, post.user_id);
+          setActionLoading(false);
 
-            if (error) {
-              Alert.alert('Error', 'Failed to create claim');
-            } else {
-              Alert.alert('Success', 'Claim submitted successfully!');
-            }
-          },
+          if (error) {
+            Alert.alert('Error', 'Failed to create claim');
+          } else {
+            Alert.alert('Success', 'Claim submitted successfully!');
+          }
         },
-      ]
-    );
+      },
+    ]);
   };
 
   const handleMessage = async () => {
@@ -65,9 +120,9 @@ export default function ViewPostScreen({ route, navigation }: any) {
     setActionLoading(false);
 
     if (!error && data) {
-      navigation.navigate('Chat', { 
-        conversationId: data.id, 
-        otherUserId: post.user_id 
+      navigation.navigate('Chat', {
+        conversationId: data.id,
+        otherUserId: post.user_id,
       });
     } else {
       Alert.alert('Error', 'Failed to start conversation');
@@ -75,29 +130,25 @@ export default function ViewPostScreen({ route, navigation }: any) {
   };
 
   const handleDelete = () => {
-    Alert.alert(
-      'Confirmation',
-      'Are you sure you want to delete this post?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            if (!post) return;
-            setActionLoading(true);
-            const { error } = await deletePost(post.id);
-            setActionLoading(false);
+    Alert.alert('Confirmation', 'Are you sure you want to delete this post?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          if (!post) return;
+          setActionLoading(true);
+          const { error } = await deletePost(post.id);
+          setActionLoading(false);
 
-            if (error) {
-              Alert.alert('Error', 'Failed to delete post');
-            } else {
-              navigation.goBack();
-            }
-          },
+          if (error) {
+            Alert.alert('Error', 'Failed to delete post');
+          } else {
+            navigation.goBack();
+          }
         },
-      ]
-    );
+      },
+    ]);
   };
 
   const handleReport = () => {
@@ -159,17 +210,15 @@ export default function ViewPostScreen({ route, navigation }: any) {
           <Text style={styles.backButton}>← Back</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{post.title}</Text>
-        <TouchableOpacity onPress={() => {
-          Alert.alert(
-            'Options',
-            '',
-            [
+        <TouchableOpacity
+          onPress={() => {
+            Alert.alert('Options', '', [
               { text: 'Delete', onPress: handleDelete, style: 'destructive' },
               { text: 'Report', onPress: handleReport },
               { text: 'Cancel', style: 'cancel' },
-            ]
-          );
-        }}>
+            ]);
+          }}
+        >
           <Text style={styles.moreButton}>⋮</Text>
         </TouchableOpacity>
       </View>
@@ -196,30 +245,64 @@ export default function ViewPostScreen({ route, navigation }: any) {
 
           <Text style={styles.title}>{post.title}</Text>
 
-          {/* Poster Info */}
-          {profile && (
-            <View style={styles.posterInfo}>
-              <Text style={styles.posterName}>{profile.full_name || 'User'}</Text>
-              <Text style={styles.posterLabel}>{profile.label || 'User'}</Text>
+          {/* ✅ Poster Info REAL */}
+          <View style={styles.posterInfo}>
+            <Text style={styles.posterName}>
+              {posterProfile?.full_name || posterProfile?.name || 'Unknown user'}
+            </Text>
+
+            {!!posterProfile?.label && (
+              <Text style={{ fontSize: 14, color: Colors.text.secondary, marginBottom: 4 }}>
+                {posterProfile.label}
+              </Text>
+            )}
+
+            {!!post?.created_at && (
               <Text style={styles.posterDate}>{formatDate(post.created_at)}</Text>
-            </View>
-          )}
+            )}
+          </View>
 
-          {/* Claimer Info Section - Only show to owner */}
+          {/* ✅ Claimer Info REAL (OWNER ONLY) */}
           {isOwner && (
-            <View style={styles.claimerSection}>
+            <View style={{ marginBottom: 20 }}>
               <Text style={styles.sectionTitle}>Claimer Information</Text>
-              <View style={styles.claimerCard}>
-                <Text style={styles.claimerName}>Shie Faly Ezail Abadia</Text>
-                <Text style={styles.claimerDetail}>Gender : Female</Text>
-                <Text style={styles.claimerDetail}>Age : 22</Text>
-                <Text style={styles.claimerDetail}>Student</Text>
-                <Text style={styles.claimerDetail}>Contact no : 09398384135</Text>
-              </View>
+
+              {claimRow && claimerProfile ? (
+                <View style={[styles.posterInfo, { borderWidth: 1, borderColor: Colors.primary }]}>
+                  <Text style={styles.posterName}>
+                    {claimerProfile?.full_name || claimerProfile?.name || 'Unknown'}
+                  </Text>
+
+                  {!!claimerProfile?.gender && (
+                    <Text style={styles.posterDate}>Gender: {claimerProfile.gender}</Text>
+                  )}
+
+                  {!!claimerProfile?.age && (
+                    <Text style={styles.posterDate}>Age: {claimerProfile.age}</Text>
+                  )}
+
+                  {!!claimerProfile?.label && (
+                    <Text style={styles.posterDate}>{claimerProfile.label}</Text>
+                  )}
+
+                  {!!claimerProfile?.contact_number && (
+                    <Text style={styles.posterDate}>Contact: {claimerProfile.contact_number}</Text>
+                  )}
+
+                  {!!claimRow?.status && (
+                    <Text style={[styles.posterDate, { marginTop: 6 }]}>
+                      Claim Status: {claimRow.status}
+                    </Text>
+                  )}
+                </View>
+              ) : (
+                <View style={styles.posterInfo}>
+                  <Text style={styles.posterDate}>No one has claimed this post yet.</Text>
+                </View>
+              )}
             </View>
           )}
 
-          {/* Map Section */}
           <View style={styles.mapSection}>
             <Text style={styles.sectionTitle}>Last found in</Text>
             <Text style={styles.locationText}>{post.location_name}</Text>
@@ -234,19 +317,6 @@ export default function ViewPostScreen({ route, navigation }: any) {
             </View>
           </View>
 
-          {/* Found By Section */}
-          <View style={styles.detailsSection}>
-            <Text style={styles.sectionTitle}>Found by</Text>
-            <View style={styles.founderCard}>
-              <Text style={styles.founderName}>Roy Manglicmot</Text>
-              <Text style={styles.founderDetail}>Gender : Male</Text>
-              <Text style={styles.founderDetail}>Age : 21</Text>
-              <Text style={styles.founderDetail}>Student</Text>
-              <Text style={styles.founderDetail}>Contact no : 09398384135</Text>
-            </View>
-          </View>
-
-          {/* Category and Details */}
           <View style={styles.infoGrid}>
             <View style={styles.infoItem}>
               <Text style={styles.infoLabel}>Category</Text>
@@ -262,39 +332,21 @@ export default function ViewPostScreen({ route, navigation }: any) {
             </View>
           </View>
 
-          {/* Details */}
           <View style={styles.descriptionSection}>
             <Text style={styles.sectionTitle}>Details</Text>
             <Text style={styles.description}>{post.description}</Text>
           </View>
 
-          {/* Claiming Methods */}
           <View style={styles.claimingSection}>
             <Text style={styles.sectionTitle}>Claiming Method/s</Text>
-            <View style={styles.methodButtons}>
-              <View style={styles.methodButton}>
-                <Text style={styles.methodText}>Meet-up</Text>
-              </View>
-              <View style={styles.methodButton}>
-                <Text style={styles.methodText}>Hand over to station</Text>
-              </View>
-            </View>
-            <Text style={styles.barangayText}>Barangay</Text>
+            <Text style={styles.description}>Claiming method: Not specified</Text>
           </View>
 
-          {/* Tags */}
           {post.tags && post.tags.length > 0 && (
             <View style={styles.tagsSection}>
               <Text style={styles.sectionTitle}>Tags</Text>
               <View style={styles.tagsContainer}>
-                {post.tags.map((tag: string | number | bigint | boolean | 
-                React.ReactElement<unknown, string | 
-                React.JSXElementConstructor<any>> | 
-                Iterable<React.ReactNode> | 
-                React.ReactPortal | Promise<string | number | bigint | 
-                boolean | React.ReactPortal | React.ReactElement<unknown, string | 
-                React.JSXElementConstructor<any>> | Iterable<React.ReactNode>>, 
-                index: React.Key) => (
+                {post.tags.map((tag: any, index: any) => (
                   <View key={index} style={styles.tag}>
                     <Text style={styles.tagText}>{tag}</Text>
                   </View>
@@ -303,7 +355,6 @@ export default function ViewPostScreen({ route, navigation }: any) {
             </View>
           )}
 
-          {/* Action Buttons */}
           {!isOwner && (
             <View style={styles.actions}>
               <PrimaryButton
@@ -426,41 +477,15 @@ const styles = StyleSheet.create({
     color: Colors.text.primary,
     marginBottom: 4,
   },
-  posterLabel: {
-    fontSize: 14,
-    color: Colors.text.secondary,
-    marginBottom: 4,
-  },
   posterDate: {
     fontSize: 12,
     color: Colors.text.secondary,
-  },
-  claimerSection: {
-    marginBottom: 20,
   },
   sectionTitle: {
     fontSize: 16,
     fontWeight: 'bold',
     color: Colors.text.primary,
     marginBottom: 10,
-  },
-  claimerCard: {
-    backgroundColor: Colors.white,
-    padding: 15,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: Colors.primary,
-  },
-  claimerName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: Colors.text.primary,
-    marginBottom: 8,
-  },
-  claimerDetail: {
-    fontSize: 14,
-    color: Colors.text.secondary,
-    marginBottom: 4,
   },
   mapSection: {
     marginBottom: 20,
@@ -478,25 +503,6 @@ const styles = StyleSheet.create({
   },
   map: {
     flex: 1,
-  },
-  detailsSection: {
-    marginBottom: 20,
-  },
-  founderCard: {
-    backgroundColor: Colors.white,
-    padding: 15,
-    borderRadius: 10,
-  },
-  founderName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: Colors.text.primary,
-    marginBottom: 8,
-  },
-  founderDetail: {
-    fontSize: 14,
-    color: Colors.text.secondary,
-    marginBottom: 4,
   },
   infoGrid: {
     backgroundColor: Colors.white,
@@ -527,29 +533,6 @@ const styles = StyleSheet.create({
   },
   claimingSection: {
     marginBottom: 20,
-  },
-  methodButtons: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 10,
-  },
-  methodButton: {
-    flex: 1,
-    backgroundColor: Colors.white,
-    padding: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: Colors.primary,
-    alignItems: 'center',
-  },
-  methodText: {
-    fontSize: 12,
-    color: Colors.primary,
-    fontWeight: '600',
-  },
-  barangayText: {
-    fontSize: 14,
-    color: Colors.text.secondary,
   },
   tagsSection: {
     marginBottom: 20,

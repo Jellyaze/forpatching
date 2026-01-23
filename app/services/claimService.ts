@@ -4,26 +4,28 @@ export interface Claim {
   id: string;
   post_id: string;
   claimer_id: string;
-  poster_id: string;
-  status: 'pending' | 'approved' | 'rejected' | 'verified';
-  verification_notes: string;
+  owner_id: string;
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled' | 'completed';
+  message?: string | null;
   created_at: string;
-  updated_at: string;
 }
 
 export const createClaim = async (
   postId: string,
   claimerId: string,
-  posterId: string
+  ownerId: string,
+  message?: string
 ): Promise<{ data: Claim | null; error: any }> => {
   try {
     const { data, error } = await supabase
-      .from('app_3f92f_claims')
+      .from('app_d56ee_claims')
       .insert([
         {
           post_id: postId,
           claimer_id: claimerId,
-          poster_id: posterId,
+          owner_id: ownerId,
+          status: 'pending',
+          message: message || null,
         },
       ])
       .select()
@@ -37,16 +39,13 @@ export const createClaim = async (
 
 export const updateClaimStatus = async (
   claimId: string,
-  status: 'approved' | 'rejected' | 'verified',
-  verificationNotes?: string
+  status: 'approved' | 'rejected' | 'cancelled' | 'completed'
 ): Promise<{ error: any }> => {
   try {
     const { error } = await supabase
-      .from('app_3f92f_claims')
+      .from('app_d56ee_claims')
       .update({
         status,
-        verification_notes: verificationNotes,
-        updated_at: new Date().toISOString(),
       })
       .eq('id', claimId);
 
@@ -56,10 +55,12 @@ export const updateClaimStatus = async (
   }
 };
 
-export const getClaimsByPost = async (postId: string): Promise<{ data: Claim[]; error: any }> => {
+export const getClaimsByPost = async (
+  postId: string
+): Promise<{ data: Claim[]; error: any }> => {
   try {
     const { data, error } = await supabase
-      .from('app_3f92f_claims')
+      .from('app_d56ee_claims')
       .select('*')
       .eq('post_id', postId)
       .order('created_at', { ascending: false });
@@ -70,10 +71,12 @@ export const getClaimsByPost = async (postId: string): Promise<{ data: Claim[]; 
   }
 };
 
-export const getUserClaims = async (userId: string): Promise<{ data: Claim[]; error: any }> => {
+export const getUserClaims = async (
+  userId: string
+): Promise<{ data: Claim[]; error: any }> => {
   try {
     const { data, error } = await supabase
-      .from('app_3f92f_claims')
+      .from('app_d56ee_claims')
       .select('*')
       .eq('claimer_id', userId)
       .order('created_at', { ascending: false });
@@ -81,5 +84,23 @@ export const getUserClaims = async (userId: string): Promise<{ data: Claim[]; er
     return { data: data || [], error };
   } catch (error) {
     return { data: [], error };
+  }
+};
+
+export const getLatestClaimForPost = async (
+  postId: string
+): Promise<{ data: Claim | null; error: any }> => {
+  try {
+    const { data, error } = await supabase
+      .from('app_d56ee_claims')
+      .select('*')
+      .eq('post_id', postId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    return { data, error };
+  } catch (error) {
+    return { data: null, error };
   }
 };
