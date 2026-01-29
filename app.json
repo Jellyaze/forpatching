@@ -56,6 +56,11 @@
   "expo": {
     "android": {
       "package": "com.jellyaze.maginghotdog"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "6413c548-3353-4529-849b-5213978cb401"
+      }
     }
   }
 }
