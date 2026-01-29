@@ -47,5 +47,15 @@
   "description": "",
   "keywords": [],
   "author": "",
-  "type": "commonjs"
+  "type": "commonjs",
+  "extra": {
+    "eas": {
+      "projectId": "6413c548-3353-4529-849b-5213978cb401"
+    }
+  },
+  "expo": {
+    "android": {
+      "package": "com.jellyaze.maginghotdog"
+    }
+  }
 }

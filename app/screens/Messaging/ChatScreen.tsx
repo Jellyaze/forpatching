@@ -1,30 +1,66 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Alert, Image } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Alert, Modal, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as DocumentPicker from 'expo-document-picker';
 import { useAuth } from '../../context/AuthContext';
-import { getMessages, sendMessage, markMessagesAsRead, subscribeToMessages, Message } from '../../services/messageService';
+import { 
+  getMessages, 
+  sendMessage, 
+  sendImageMessage,
+  sendFileMessage,
+  markMessagesAsRead, 
+  subscribeToMessages,
+  editMessage,
+  deleteMessage,
+  setTypingIndicator,
+  subscribeToTypingIndicators,
+} from '../../services/messageService';
+import { Message } from '../../types/message.types';
 import { Colors } from '../../constants/Colors';
-import { formatTime } from '../../utils/formatDate';
+import MessageBubble from '../../components/messaging/MessageBubble';
+import TypingIndicator from '../../components/messaging/TypingIndicator';
+import ImagePickerModal from '../../components/messaging/ImagePickerModal';
+import { getFileSize } from '../../services/uploadService';
 
 export default function ChatScreen({ route, navigation }: any) {
   const { conversationId, otherUserId } = route.params;
-  const { user, profile } = useAuth() as any;
+  const { user } = useAuth() as any;
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
+  const [imagePickerVisible, setImagePickerVisible] = useState(false);
+  const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     loadMessages();
     markAsRead();
 
-    const channel = subscribeToMessages(conversationId, (newMessage) => {
+    const messageChannel = subscribeToMessages(conversationId, (newMessage) => {
       setMessages((prev) => [...prev, newMessage]);
       setTimeout(() => flatListRef.current?.scrollToEnd(), 100);
+      if (newMessage.sender_id !== user?.id) {
+        markAsRead();
+      }
     });
 
+    const typingChannel = subscribeToTypingIndicators(
+      conversationId,
+      user?.id || '',
+      (typing) => {
+        setIsTyping(typing);
+      }
+    );
+
     return () => {
-      channel.unsubscribe();
+      messageChannel.unsubscribe();
+      typingChannel.unsubscribe();
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
     };
   }, [conversationId]);
 
@@ -42,57 +78,178 @@ export default function ChatScreen({ route, navigation }: any) {
     }
   };
 
+  const handleTextChange = (text: string) => {
+    setInputText(text);
+
+    // Send typing indicator
+    if (user) {
+      setTypingIndicator(conversationId, user.id, text.length > 0);
+
+      // Clear previous timeout
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      // Stop typing after 2 seconds of inactivity
+      typingTimeoutRef.current = setTimeout(() => {
+        setTypingIndicator(conversationId, user.id, false);
+      }, 2000);
+    }
+  };
+
   const handleSend = async () => {
     if (!inputText.trim() || !user) return;
 
     setLoading(true);
-    const { error } = await sendMessage(conversationId, user.id, inputText.trim());
+
+    if (editingMessageId) {
+      // Edit existing message
+      const { error } = await editMessage(editingMessageId, inputText.trim());
+      if (error) {
+        Alert.alert('Error', 'Failed to edit message');
+      } else {
+        // Update local state
+        setMessages(prev =>
+          prev.map(msg =>
+            msg.id === editingMessageId
+              ? { ...msg, content: inputText.trim(), is_edited: true }
+              : msg
+          )
+        );
+        setEditingMessageId(null);
+      }
+    } else {
+      // Send new message
+      const { error } = await sendMessage(conversationId, user.id, inputText.trim());
+      if (error) {
+        Alert.alert('Error', 'Failed to send message');
+      }
+    }
+
+    setLoading(false);
+    setInputText('');
+    setTypingIndicator(conversationId, user.id, false);
+    setTimeout(() => flatListRef.current?.scrollToEnd(), 100);
+  };
+
+  const handleImageSelected = async (uri: string) => {
+    if (!user) return;
+
+    setLoading(true);
+    const { error } = await sendImageMessage(conversationId, user.id, uri);
     setLoading(false);
 
     if (error) {
-      Alert.alert('Error', 'Failed to send message');
+      Alert.alert('Error', 'Failed to send image');
     } else {
-      setInputText('');
       setTimeout(() => flatListRef.current?.scrollToEnd(), 100);
     }
+  };
+
+  const handleFilePick = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets[0]) return;
+
+      const file = result.assets[0];
+      const fileSize = await getFileSize(file.uri);
+
+      // Check file size (max 10MB)
+      if (fileSize > 10 * 1024 * 1024) {
+        Alert.alert('Error', 'File size must be less than 10MB');
+        return;
+      }
+
+      if (!user) return;
+
+      setLoading(true);
+      const { error } = await sendFileMessage(
+        conversationId,
+        user.id,
+        file.uri,
+        file.name,
+        file.mimeType || 'application/octet-stream',
+        fileSize
+      );
+      setLoading(false);
+
+      if (error) {
+        Alert.alert('Error', 'Failed to send file');
+      } else {
+        setTimeout(() => flatListRef.current?.scrollToEnd(), 100);
+      }
+    } catch (error) {
+      console.error('File picker error:', error);
+    }
+  };
+
+  const handleMessageLongPress = (message: Message) => {
+    if (message.sender_id !== user?.id) return;
+
+    Alert.alert(
+      'Message Options',
+      '',
+      [
+        {
+          text: 'Edit',
+          onPress: () => {
+            if (message.message_type === 'text') {
+              setInputText(message.content);
+              setEditingMessageId(message.id);
+            } else {
+              Alert.alert('Info', 'Only text messages can be edited');
+            }
+          },
+        },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              'Delete Message',
+              'Are you sure you want to delete this message?',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Delete',
+                  style: 'destructive',
+                  onPress: async () => {
+                    const { error } = await deleteMessage(message.id);
+                    if (!error) {
+                      setMessages(prev => prev.filter(m => m.id !== message.id));
+                    } else {
+                      Alert.alert('Error', 'Failed to delete message');
+                    }
+                  },
+                },
+              ]
+            );
+          },
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  };
+
+  const handleImagePress = (url: string) => {
+    setSelectedImageUrl(url);
   };
 
   const renderMessage = ({ item }: { item: Message }) => {
     const isMyMessage = item.sender_id === user?.id;
 
     return (
-      <View style={[styles.messageContainer, isMyMessage ? styles.myMessage : styles.otherMessage]}>
-        <View style={[styles.messageBubble, isMyMessage ? styles.myBubble : styles.otherBubble]}>
-          <Text style={[styles.messageText, isMyMessage ? styles.myMessageText : styles.otherMessageText]}>
-            {item.content}
-          </Text>
-          <Text style={[styles.messageTime, isMyMessage ? styles.myMessageTime : styles.otherMessageTime]}>
-            {formatTime(item.created_at)}
-          </Text>
-        </View>
-      </View>
+      <MessageBubble
+        message={item}
+        isMyMessage={isMyMessage}
+        onLongPress={() => handleMessageLongPress(item)}
+        onImagePress={handleImagePress}
+      />
     );
-  };
-
-  const handleDeleteConversation = () => {
-    Alert.alert(
-      'Confirmation',
-      'Are you sure you want to delete this conversation?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            navigation.goBack();
-          },
-        },
-      ]
-    );
-  };
-
-  const handleReport = () => {
-    Alert.alert('Report', 'Report functionality coming soon');
   };
 
   return (
@@ -102,31 +259,21 @@ export default function ChatScreen({ route, navigation }: any) {
           <Text style={styles.backButton}>← Back</Text>
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>Sling bag in bus</Text>
-          <Text style={styles.headerSubtitle}>Roy Manglicmot</Text>
+          <Text style={styles.headerTitle}>Chat</Text>
+          <Text style={styles.headerSubtitle}>User {otherUserId.substring(0, 8)}</Text>
         </View>
         <TouchableOpacity onPress={() => {
           Alert.alert(
             'Options',
             '',
             [
-              { text: 'Delete', onPress: handleDeleteConversation, style: 'destructive' },
-              { text: 'Report', onPress: handleReport },
+              { text: 'Search Messages', onPress: () => Alert.alert('Coming Soon', 'Search functionality will be added soon') },
               { text: 'Cancel', style: 'cancel' },
             ]
           );
         }}>
           <Text style={styles.moreButton}>⋮</Text>
         </TouchableOpacity>
-      </View>
-
-      {/* Claimer Info Banner */}
-      <View style={styles.claimerBanner}>
-        <Text style={styles.claimerName}>Shie Faly Ezail Abadia</Text>
-        <Text style={styles.claimerInfo}>Gender : Female</Text>
-        <Text style={styles.claimerInfo}>Age : 22</Text>
-        <Text style={styles.claimerInfo}>Student</Text>
-        <Text style={styles.claimerInfo}>Contact no : 09398384135</Text>
       </View>
 
       <KeyboardAvoidingView
@@ -141,14 +288,39 @@ export default function ChatScreen({ route, navigation }: any) {
           renderItem={renderMessage}
           contentContainerStyle={styles.messagesList}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd()}
+          ListFooterComponent={isTyping ? <TypingIndicator /> : null}
         />
 
+        {editingMessageId && (
+          <View style={styles.editingBanner}>
+            <Text style={styles.editingText}>Editing message</Text>
+            <TouchableOpacity onPress={() => {
+              setEditingMessageId(null);
+              setInputText('');
+            }}>
+              <Text style={styles.cancelEdit}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         <View style={styles.inputContainer}>
+          <TouchableOpacity 
+            style={styles.attachButton}
+            onPress={() => setImagePickerVisible(true)}
+          >
+            <Text style={styles.attachIcon}>📷</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={styles.attachButton}
+            onPress={handleFilePick}
+          >
+            <Text style={styles.attachIcon}>📎</Text>
+          </TouchableOpacity>
           <TextInput
             style={styles.input}
             value={inputText}
-            onChangeText={setInputText}
-            placeholder="Type the message"
+            onChangeText={handleTextChange}
+            placeholder={editingMessageId ? "Edit message..." : "Type a message..."}
             multiline
           />
           <TouchableOpacity
@@ -156,10 +328,34 @@ export default function ChatScreen({ route, navigation }: any) {
             onPress={handleSend}
             disabled={!inputText.trim() || loading}
           >
-            <Text style={styles.sendIcon}>➤</Text>
+            <Text style={styles.sendIcon}>{editingMessageId ? '✓' : '➤'}</Text>
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      <ImagePickerModal
+        visible={imagePickerVisible}
+        onClose={() => setImagePickerVisible(false)}
+        onImageSelected={handleImageSelected}
+      />
+
+      <Modal
+        visible={!!selectedImageUrl}
+        transparent
+        onRequestClose={() => setSelectedImageUrl(null)}
+      >
+        <TouchableOpacity 
+          style={styles.imageModalOverlay}
+          activeOpacity={1}
+          onPress={() => setSelectedImageUrl(null)}
+        >
+          <Image
+            source={{ uri: selectedImageUrl || '' }}
+            style={styles.fullscreenImage}
+            resizeMode="contain"
+          />
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -199,69 +395,27 @@ const styles = StyleSheet.create({
     fontSize: 24,
     color: Colors.text.primary,
   },
-  claimerBanner: {
-    backgroundColor: Colors.primaryLight,
-    padding: 15,
-  },
-  claimerName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: Colors.white,
-    marginBottom: 4,
-  },
-  claimerInfo: {
-    fontSize: 12,
-    color: Colors.white,
-    marginBottom: 2,
-  },
   content: {
     flex: 1,
   },
   messagesList: {
     padding: 15,
   },
-  messageContainer: {
-    marginVertical: 5,
+  editingBanner: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: Colors.primaryLight,
+    padding: 10,
   },
-  myMessage: {
-    alignItems: 'flex-end',
-  },
-  otherMessage: {
-    alignItems: 'flex-start',
-  },
-  messageBubble: {
-    maxWidth: '75%',
-    padding: 12,
-    borderRadius: 15,
-  },
-  myBubble: {
-    backgroundColor: Colors.primary,
-    borderBottomRightRadius: 5,
-  },
-  otherBubble: {
-    backgroundColor: Colors.white,
-    borderBottomLeftRadius: 5,
-  },
-  messageText: {
-    fontSize: 15,
-    lineHeight: 20,
-  },
-  myMessageText: {
+  editingText: {
     color: Colors.white,
+    fontSize: 14,
   },
-  otherMessageText: {
-    color: Colors.text.primary,
-  },
-  messageTime: {
-    fontSize: 11,
-    marginTop: 5,
-  },
-  myMessageTime: {
+  cancelEdit: {
     color: Colors.white,
-    opacity: 0.8,
-  },
-  otherMessageTime: {
-    color: Colors.text.secondary,
+    fontSize: 14,
+    fontWeight: 'bold',
   },
   inputContainer: {
     flexDirection: 'row',
@@ -270,6 +424,16 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
     borderTopWidth: 1,
     borderTopColor: Colors.lightGray,
+  },
+  attachButton: {
+    width: 36,
+    height: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 5,
+  },
+  attachIcon: {
+    fontSize: 20,
   },
   input: {
     flex: 1,
@@ -296,5 +460,15 @@ const styles = StyleSheet.create({
   sendIcon: {
     color: Colors.white,
     fontSize: 18,
+  },
+  imageModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullscreenImage: {
+    width: '100%',
+    height: '100%',
   },
 });
